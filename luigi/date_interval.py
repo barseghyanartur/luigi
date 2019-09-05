@@ -25,7 +25,10 @@ Example::
     class MyTask(luigi.Task):
         date_interval = luigi.DateIntervalParameter()
 
-Now, you can launch this from the command line using ``--date-interval 2014-05-10`` or ``--date-interval 2014-W26`` (using week notation) or ``--date-interval 2014`` (for a year) and some other notations.
+Now, you can launch this from the command line using
+``--date-interval 2014-05-10`` or
+``--date-interval 2014-W26`` (using week notation) or
+``--date-interval 2014`` (for a year) and some other notations.
 """
 
 from __future__ import division
@@ -122,7 +125,8 @@ class DateInterval(object):
         if not isinstance(self, type(other)):
             # doing this because it's not well defined if eg. 2012-01-01-2013-01-01 == 2012
             raise TypeError('Date interval type mismatch')
-        return cmp((self.date_a, self.date_b), (other.date_a, other.date_b))
+
+        return (self > other) - (self < other)
 
     def __lt__(self, other):
         if not isinstance(self, type(other)):
@@ -264,7 +268,7 @@ class Custom(DateInterval):
 
     @classmethod
     def parse(cls, s):
-        if re.match('\d\d\d\d\-\d\d\-\d\d\-\d\d\d\d\-\d\d\-\d\d$', s):
+        if re.match(r'\d\d\d\d\-\d\d\-\d\d\-\d\d\d\d\-\d\d\-\d\d$', s):
             x = list(map(int, s.split('-')))
             date_a = datetime.date(*x[:3])
             date_b = datetime.date(*x[3:])

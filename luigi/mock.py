@@ -15,7 +15,7 @@
 # limitations under the License.
 #
 """
-This moduel provides a class :class:`MockTarget`, an implementation of :py:class:`~luigi.target.Target`.
+This module provides a class :class:`MockTarget`, an implementation of :py:class:`~luigi.target.Target`.
 :class:`MockTarget` contains all data in-memory.
 The main purpose is unit testing workflows without writing to disk.
 """
@@ -27,7 +27,6 @@ import sys
 import warnings
 
 from luigi import six
-import luigi.util
 from luigi import target
 from luigi.format import get_default_format, MixedUnicodeBytes
 
@@ -37,6 +36,15 @@ class MockFileSystem(target.FileSystem):
     MockFileSystem inspects/modifies _data to simulate file system operations.
     """
     _data = None
+
+    def copy(self, path, dest, raise_if_exists=False):
+        """
+        Copies the contents of a single file path to dest
+        """
+        if raise_if_exists and dest in self.get_all_data():
+            raise RuntimeError('Destination exists: %s' % path)
+        contents = self.get_all_data()[path]
+        self.get_all_data()[dest] = contents
 
     def get_all_data(self):
         # This starts a server in the background, so we don't want to do it in the global scope
@@ -64,12 +72,24 @@ class MockFileSystem(target.FileSystem):
         else:
             self.get_all_data().pop(path)
 
+    def move(self, path, dest, raise_if_exists=False):
+        """
+        Moves a single file from path to dest
+        """
+        if raise_if_exists and dest in self.get_all_data():
+            raise RuntimeError('Destination exists: %s' % path)
+        contents = self.get_all_data().pop(path)
+        self.get_all_data()[dest] = contents
+
     def listdir(self, path):
         """
         listdir does a prefix match of self.get_all_data(), but doesn't yet support globs.
         """
         return [s for s in self.get_all_data().keys()
                 if s.startswith(path)]
+
+    def isdir(self, path):
+        return any(self.listdir(path))
 
     def mkdir(self, path, parents=True, raise_if_exists=False):
         """
@@ -86,7 +106,7 @@ class MockTarget(target.FileSystemTarget):
 
     def __init__(self, fn, is_tmp=None, mirror_on_stderr=False, format=None):
         self._mirror_on_stderr = mirror_on_stderr
-        self._fn = fn
+        self.path = fn
         if format is None:
             format = get_default_format()
 
@@ -97,20 +117,23 @@ class MockTarget(target.FileSystemTarget):
         self.format = format
 
     def exists(self,):
-        return self._fn in self.fs.get_all_data()
+        return self.path in self.fs.get_all_data()
 
-    def rename(self, path, raise_if_exists=False):
-        if raise_if_exists and path in self.fs.get_all_data():
-            raise RuntimeError('Destination exists: %s' % path)
-        contents = self.fs.get_all_data().pop(self._fn)
-        self.fs.get_all_data()[path] = contents
+    def move(self, path, raise_if_exists=False):
+        """
+        Call MockFileSystem's move command
+        """
+        self.fs.move(self.path, path, raise_if_exists)
 
-    @property
-    def path(self):
-        return self._fn
+    def rename(self, *args, **kwargs):
+        """
+        Call move to rename self
+        """
+        self.move(*args, **kwargs)
 
-    def open(self, mode):
-        fn = self._fn
+    def open(self, mode='r'):
+        fn = self.path
+        mock_target = self
 
         class Buffer(BytesIO):
             # Just to be able to do writing + reading from the same buffer
@@ -120,48 +143,46 @@ class MockTarget(target.FileSystemTarget):
             def set_wrapper(self, wrapper):
                 self.wrapper = wrapper
 
-            def write(self2, data):
-                if six.PY3:
-                    stderrbytes = sys.stderr.buffer
-                else:
-                    stderrbytes = sys.stderr
-
-                if self._mirror_on_stderr:
-                    if self2._write_line:
+            def write(self, data):
+                if mock_target._mirror_on_stderr:
+                    if self._write_line:
                         sys.stderr.write(fn + ": ")
-                    stderrbytes.write(data)
-                    if (data[-1]) == '\n':
-                        self2._write_line = True
+                    if six.binary_type:
+                        sys.stderr.write(data.decode('utf8'))
                     else:
-                        self2._write_line = False
-                super(Buffer, self2).write(data)
+                        sys.stderr.write(data)
+                    if (data[-1]) == '\n':
+                        self._write_line = True
+                    else:
+                        self._write_line = False
+                super(Buffer, self).write(data)
 
-            def close(self2):
-                if mode == 'w':
+            def close(self):
+                if mode[0] == 'w':
                     try:
-                        self.wrapper.flush()
+                        mock_target.wrapper.flush()
                     except AttributeError:
                         pass
-                    self.fs.get_all_data()[fn] = self2.getvalue()
-                super(Buffer, self2).close()
+                    mock_target.fs.get_all_data()[fn] = self.getvalue()
+                super(Buffer, self).close()
 
             def __exit__(self, exc_type, exc_val, exc_tb):
                 if not exc_type:
                     self.close()
 
-            def __enter__(self2):
-                return self2
+            def __enter__(self):
+                return self
 
-            def readable(self2):
-                return mode == 'r'
+            def readable(self):
+                return mode[0] == 'r'
 
-            def writeable(self2):
-                return mode == 'w'
+            def writeable(self):
+                return mode[0] == 'w'
 
-            def seekable(self2):
+            def seekable(self):
                 return False
 
-        if mode == 'w':
+        if mode[0] == 'w':
             wrapper = self.format.pipe_writer(Buffer())
             wrapper.set_wrapper(wrapper)
             return wrapper

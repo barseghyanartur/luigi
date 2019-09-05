@@ -21,7 +21,7 @@ import time
 import luigi
 
 
-class Config(luigi.Task):
+class Configuration(luigi.Task):
     seed = luigi.IntParameter()
 
     def output(self):
@@ -39,7 +39,7 @@ class Config(luigi.Task):
         rnd.seed(self.seed)
 
         result = ','.join(
-            [str(x) for x in rnd.sample(range(300), rnd.randint(7, 25))])
+            [str(x) for x in rnd.sample(list(range(300)), rnd.randint(7, 25))])
         with self.output().open('w') as f:
             f.write(result)
 
@@ -78,7 +78,7 @@ class Dynamic(luigi.Task):
 
     def run(self):
         # This could be done using regular requires method
-        config = self.clone(Config)
+        config = self.clone(Configuration)
         yield config
 
         with config.output().open() as f:

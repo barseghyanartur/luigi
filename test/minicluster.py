@@ -24,7 +24,10 @@ from nose.plugins.attrib import attr
 
 import unittest
 
-from snakebite.minicluster import MiniCluster
+try:
+    from snakebite.minicluster import MiniCluster
+except ImportError:
+    raise unittest.SkipTest('To use minicluster, snakebite must be installed.')
 
 
 @attr('minicluster')
@@ -38,9 +41,13 @@ class MiniClusterTestCase(unittest.TestCase):
     cluster = None
 
     @classmethod
+    def instantiate_cluster(cls):
+        return MiniCluster(None, nnport=50030)
+
+    @classmethod
     def setupClass(cls):
         if not cls.cluster:
-            cls.cluster = MiniCluster(None, nnport=50030)
+            cls.cluster = cls.instantiate_cluster()
         cls.cluster.mkdir("/tmp")
 
     @classmethod
@@ -49,7 +56,7 @@ class MiniClusterTestCase(unittest.TestCase):
             cls.cluster.terminate()
 
     def setUp(self):
-        self.fs = luigi.contrib.hdfs.client
+        self.fs = luigi.contrib.hdfs.get_autoconfig_client()
         cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "testconfig")
         hadoop_bin = os.path.join(os.environ['HADOOP_HOME'], 'bin/hadoop')
         cmd = "{} --config {}".format(hadoop_bin, cfg_path)

@@ -21,8 +21,10 @@ from luigi import six
 
 from helpers import with_config
 import luigi
-from luigi.db_task_history import DbTaskHistory, Base
+from luigi.db_task_history import DbTaskHistory
 from luigi.task_status import DONE, PENDING, RUNNING
+import luigi.scheduler
+from luigi.parameter import ParameterVisibility
 
 
 class DummyTask(luigi.Task):
@@ -31,7 +33,8 @@ class DummyTask(luigi.Task):
 
 class ParamTask(luigi.Task):
     param1 = luigi.Parameter()
-    param2 = luigi.IntParameter()
+    param2 = luigi.IntParameter(visibility=ParameterVisibility.HIDDEN)
+    param3 = luigi.Parameter(default="empty", visibility=ParameterVisibility.PRIVATE)
 
 
 class DbTaskHistoryTest(unittest.TestCase):
@@ -78,10 +81,25 @@ class DbTaskHistoryTest(unittest.TestCase):
                 self.assertTrue(param_name in record.parameters)
                 self.assertEqual(str(param_value), record.parameters[param_name].value)
 
+    def test_task_blank_param(self):
+        self.run_task(DummyTask(foo=""))
+
+        tasks = list(self.history.find_all_by_name('DummyTask'))
+
+        self.assertEqual(len(tasks), 1)
+        task_record = tasks[0]
+        self.assertEqual(task_record.name, 'DummyTask')
+        self.assertEqual(task_record.host, 'hostname')
+        self.assertIn('foo', task_record.parameters)
+        self.assertEqual(task_record.parameters['foo'].value, '')
+
     def run_task(self, task):
-        self.history.task_scheduled(task.task_id)
-        self.history.task_started(task.task_id, 'hostname')
-        self.history.task_finished(task.task_id, successful=True)
+        task2 = luigi.scheduler.Task(task.task_id, PENDING, [], family=task.task_family,
+                                     params=task.param_kwargs, retry_policy=luigi.scheduler._get_empty_retry_policy())
+
+        self.history.task_scheduled(task2)
+        self.history.task_started(task2, 'hostname')
+        self.history.task_finished(task2, successful=True)
 
 
 class MySQLDbTaskHistoryTest(unittest.TestCase):
@@ -99,7 +117,7 @@ class MySQLDbTaskHistoryTest(unittest.TestCase):
         self.run_task(task)
 
         task_record = six.advance_iterator(self.history.find_all_by_name('DummyTask'))
-        print (task_record.events)
+        print(task_record.events)
         self.assertEqual(task_record.events[0].event_name, DONE)
 
     def test_utc_conversion(self):
@@ -111,11 +129,15 @@ class MySQLDbTaskHistoryTest(unittest.TestCase):
         task_record = six.advance_iterator(self.history.find_all_by_name('DummyTask'))
         last_event = task_record.events[0]
         try:
-            print (from_utc(str(last_event.ts)))
+            print(from_utc(str(last_event.ts)))
         except ValueError:
             self.fail("Failed to convert timestamp {} to UTC".format(last_event.ts))
 
     def run_task(self, task):
-        self.history.task_scheduled(task.task_id)
-        self.history.task_started(task.task_id, 'hostname')
-        self.history.task_finished(task.task_id, successful=True)
+        task2 = luigi.scheduler.Task(task.task_id, PENDING, [],
+                                     family=task.task_family, params=task.param_kwargs,
+                                     retry_policy=luigi.scheduler._get_empty_retry_policy())
+
+        self.history.task_scheduled(task2)
+        self.history.task_started(task2, 'hostname')
+        self.history.task_finished(task2, successful=True)

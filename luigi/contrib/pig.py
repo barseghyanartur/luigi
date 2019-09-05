@@ -16,13 +16,13 @@
 #
 """
 Apache Pig support.
-Example configuration section in client.cfg::
+Example configuration section in luigi.cfg::
 
     [pig]
     # pig home directory
     home: /usr/share/pig
 """
-
+from contextlib import contextmanager
 import logging
 import os
 import select
@@ -95,30 +95,39 @@ class PigJobTask(luigi.Task):
         """
         raise NotImplementedError("subclass should define pig_script_path")
 
+    @contextmanager
     def _build_pig_cmd(self):
         opts = self.pig_options()
 
-        for k, v in six.iteritems(self.pig_parameters()):
-            opts.append("-p")
-            opts.append("%s=%s" % (k, v))
+        def line(k, v):
+            return ('%s=%s%s' % (k, v, os.linesep)).encode('utf-8')
 
-        if self.pig_properties():
-            with open('pig_property_file', 'w') as prop_file:
-                prop_file.writelines(["%s=%s%s" % (k, v, os.linesep) for (k, v) in six.iteritems(self.pig_properties())])
-            opts.append('-propertyFile')
-            opts.append('pig_property_file')
+        with tempfile.NamedTemporaryFile() as param_file, tempfile.NamedTemporaryFile() as prop_file:
+            if self.pig_parameters():
+                items = six.iteritems(self.pig_parameters())
+                param_file.writelines(line(k, v) for (k, v) in items)
+                param_file.flush()
+                opts.append('-param_file')
+                opts.append(param_file.name)
 
-        cmd = [self.pig_command_path()] + opts + ["-f", self.pig_script_path()]
+            if self.pig_properties():
+                items = six.iteritems(self.pig_properties())
+                prop_file.writelines(line(k, v) for (k, v) in items)
+                prop_file.flush()
+                opts.append('-propertyFile')
+                opts.append(prop_file.name)
 
-        logger.info(' '.join(cmd))
-        return cmd
+            cmd = [self.pig_command_path()] + opts + ["-f", self.pig_script_path()]
+
+            logger.info(subprocess.list2cmdline(cmd))
+            yield cmd
 
     def run(self):
-        cmd = self._build_pig_cmd()
-        self.track_and_progress(cmd)
+        with self._build_pig_cmd() as cmd:
+            self.track_and_progress(cmd)
 
     def track_and_progress(self, cmd):
-        temp_stdout = tempfile.TemporaryFile()
+        temp_stdout = tempfile.TemporaryFile('wb')
         env = os.environ.copy()
         env['PIG_HOME'] = self.pig_home()
         for k, v in six.iteritems(self.pig_env_vars()):
@@ -136,8 +145,9 @@ class PigJobTask(luigi.Task):
                         line = proc.stderr.readline().decode('utf8')
                         err_lines.append(line)
                     if fd == proc.stdout.fileno():
-                        line = proc.stdout.readline().decode('utf8')
-                        temp_stdout.write(line)
+                        line_bytes = proc.stdout.readline()
+                        temp_stdout.write(line_bytes)
+                        line = line_bytes.decode('utf8')
 
                 err_line = line.lower()
                 if err_line.find('More information at:') != -1:
@@ -148,7 +158,7 @@ class PigJobTask(luigi.Task):
                         logger.info(t)
 
         # Read the rest + stdout
-        err = ''.join(err_lines + [err_line.decode('utf8') for err_line in proc.stderr])
+        err = ''.join(err_lines + [an_err_line.decode('utf8') for an_err_line in proc.stderr])
         if proc.returncode == 0:
             logger.info("Job completed successfully!")
         else:

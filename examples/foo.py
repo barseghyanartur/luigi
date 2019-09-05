@@ -14,32 +14,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+"""
+You can run this example like this:
 
-import os
-import shutil
+    .. code:: console
+
+            $ rm -rf '/tmp/bar'
+            $ luigi --module examples.foo examples.Foo --workers 2 --local-scheduler
+
+"""
+
+from __future__ import print_function
 import time
 
 import luigi
 
 
-class MyExternal(luigi.ExternalTask):
-
-    def complete(self):
-        return False
-
-
-class Foo(luigi.Task):
+class Foo(luigi.WrapperTask):
+    task_namespace = 'examples'
 
     def run(self):
-        print "Running Foo"
+        print("Running Foo")
 
     def requires(self):
-        #        yield MyExternal()
-        for i in xrange(10):
+        for i in range(10):
             yield Bar(i)
 
 
 class Bar(luigi.Task):
+    task_namespace = 'examples'
     num = luigi.IntParameter()
 
     def run(self):
@@ -55,10 +58,3 @@ class Bar(luigi.Task):
         """
         time.sleep(1)
         return luigi.LocalTarget('/tmp/bar/%d' % self.num)
-
-
-if __name__ == "__main__":
-    if os.path.exists('/tmp/bar'):
-        shutil.rmtree('/tmp/bar')
-
-    luigi.run(['--task', 'Foo', '--workers', '2'], use_optparse=True)

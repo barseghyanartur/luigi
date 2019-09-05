@@ -19,10 +19,6 @@ Define the centralized register of all :class:`~luigi.task.Task` classes.
 """
 
 import abc
-try:
-    from collections import OrderedDict
-except ImportError:
-    from ordereddict import OrderedDict
 
 from luigi import six
 import logging
@@ -30,6 +26,14 @@ logger = logging.getLogger('luigi-interface')
 
 
 class TaskClassException(Exception):
+    pass
+
+
+class TaskClassNotFoundException(TaskClassException):
+    pass
+
+
+class TaskClassAmbigiousException(TaskClassException):
     pass
 
 
@@ -44,10 +48,10 @@ class Register(abc.ABCMeta):
     2. Keep track of all subclasses of :py:class:`Task` and expose them.
     """
     __instance_cache = {}
-    _default_namespace = None
+    _default_namespace_dict = {}
     _reg = []
     AMBIGUOUS_CLASS = object()  # Placeholder denoting an error
-    """If this value is returned by :py:meth:`__get_reg` then there is an
+    """If this value is returned by :py:meth:`_get_reg` then there is an
     ambiguous task name (two :py:class:`Task` have the same name). This denotes
     an error."""
 
@@ -57,14 +61,12 @@ class Register(abc.ABCMeta):
 
         Also register all subclasses.
 
-        Set the task namespace to whatever the currently declared namespace is.
+        When the set or inherited namespace evaluates to ``None``, set the task namespace to
+        whatever the currently declared namespace is.
         """
-        if "task_namespace" not in classdict:
-            classdict["task_namespace"] = metacls._default_namespace
-
         cls = super(Register, metacls).__new__(metacls, classname, bases, classdict)
+        cls._namespace_at_class_time = metacls._get_namespace(cls.__module__)
         metacls._reg.append(cls)
-
         return cls
 
     def __call__(cls, *args, **kwargs):
@@ -115,48 +117,50 @@ class Register(abc.ABCMeta):
     @property
     def task_family(cls):
         """
-        The task family for the given class.
-
-        If ``cls.task_namespace is None`` then it's the name of the class.
-        Otherwise, ``<task_namespace>.`` is prefixed to the class name.
+        Internal note: This function will be deleted soon.
         """
-        if cls.task_namespace is None:
+        if not cls.get_task_namespace():
             return cls.__name__
         else:
-            return "%s.%s" % (cls.task_namespace, cls.__name__)
+            return "{}.{}".format(cls.get_task_namespace(), cls.__name__)
 
     @classmethod
-    def __get_reg(cls):
+    def _get_reg(cls):
         """Return all of the registered classes.
 
-        :return:  an ``collections.OrderedDict`` of task_family -> class
+        :return:  an ``dict`` of task_family -> class
         """
         # We have to do this on-demand in case task names have changed later
-        # We return this in a topologically sorted list of inheritance: this is useful in some cases (#822)
-        reg = OrderedDict()
-        for cls in cls._reg:
-            if cls.run == NotImplemented:
+        reg = dict()
+        for task_cls in cls._reg:
+            if not task_cls._visible_in_registry:
                 continue
-            name = cls.task_family
 
-            if name in reg and reg[name] != cls and \
-                    reg[name] != cls.AMBIGUOUS_CLASS and \
-                    not issubclass(cls, reg[name]):
+            name = task_cls.get_task_family()
+            if name in reg and \
+                    (reg[name] == Register.AMBIGUOUS_CLASS or  # Check so issubclass doesn't crash
+                     not issubclass(task_cls, reg[name])):
                 # Registering two different classes - this means we can't instantiate them by name
                 # The only exception is if one class is a subclass of the other. In that case, we
                 # instantiate the most-derived class (this fixes some issues with decorator wrappers).
-                reg[name] = cls.AMBIGUOUS_CLASS
+                reg[name] = Register.AMBIGUOUS_CLASS
             else:
-                reg[name] = cls
+                reg[name] = task_cls
 
         return reg
+
+    @classmethod
+    def _set_reg(cls, reg):
+        """The writing complement of _get_reg
+        """
+        cls._reg = [task_cls for task_cls in reg.values() if task_cls is not cls.AMBIGUOUS_CLASS]
 
     @classmethod
     def task_names(cls):
         """
         List of task names as strings
         """
-        return sorted(cls.__get_reg().keys())
+        return sorted(cls._get_reg().keys())
 
     @classmethod
     def tasks_str(cls):
@@ -170,12 +174,12 @@ class Register(abc.ABCMeta):
         """
         Returns an unambiguous class or raises an exception.
         """
-        task_cls = cls.__get_reg().get(name)
+        task_cls = cls._get_reg().get(name)
         if not task_cls:
-            raise TaskClassException('Task %r not found. Candidates are: %s' % (name, cls.tasks_str()))
+            raise TaskClassNotFoundException(cls._missing_task_msg(name))
 
         if task_cls == cls.AMBIGUOUS_CLASS:
-            raise TaskClassException('Task %r is ambiguous' % name)
+            raise TaskClassAmbigiousException('Task %r is ambiguous' % name)
         return task_cls
 
     @classmethod
@@ -185,11 +189,58 @@ class Register(abc.ABCMeta):
 
         :return: a generator of tuples (TODO: we should make this more elegant)
         """
-        for task_name, task_cls in six.iteritems(cls.__get_reg()):
+        for task_name, task_cls in six.iteritems(cls._get_reg()):
             if task_cls == cls.AMBIGUOUS_CLASS:
                 continue
             for param_name, param_obj in task_cls.get_params():
                 yield task_name, (not task_cls.use_cmdline_section), param_name, param_obj
+
+    @staticmethod
+    def _editdistance(a, b):
+        """ Simple unweighted Levenshtein distance """
+        r0 = range(0, len(b) + 1)
+        r1 = [0] * (len(b) + 1)
+
+        for i in range(0, len(a)):
+            r1[0] = i + 1
+
+            for j in range(0, len(b)):
+                c = 0 if a[i] is b[j] else 1
+                r1[j + 1] = min(r1[j] + 1, r0[j + 1] + 1, r0[j] + c)
+
+            r0 = r1[:]
+
+        return r1[len(b)]
+
+    @classmethod
+    def _missing_task_msg(cls, task_name):
+        weighted_tasks = [(Register._editdistance(task_name, task_name_2), task_name_2) for task_name_2 in cls.task_names()]
+        ordered_tasks = sorted(weighted_tasks, key=lambda pair: pair[0])
+        candidates = [task for (dist, task) in ordered_tasks if dist <= 5 and dist < len(task)]
+        if candidates:
+            return "No task %s. Did you mean:\n%s" % (task_name, '\n'.join(candidates))
+        else:
+            return "No task %s. Candidates are: %s" % (task_name, cls.tasks_str())
+
+    @classmethod
+    def _get_namespace(mcs, module_name):
+        for parent in mcs._module_parents(module_name):
+            entry = mcs._default_namespace_dict.get(parent)
+            if entry:
+                return entry
+        return ''  # Default if nothing specifies
+
+    @staticmethod
+    def _module_parents(module_name):
+        '''
+        >>> list(Register._module_parents('a.b'))
+        ['a.b', 'a', '']
+        '''
+        spl = module_name.split('.')
+        for i in range(len(spl), 0, -1):
+            yield '.'.join(spl[0:i])
+        if module_name:
+            yield ''
 
 
 def load_task(module, task_name, params_str):

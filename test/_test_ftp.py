@@ -15,15 +15,26 @@
 # limitations under the License.
 #
 
+# this is an integration test. to run this test requires that an actuall FTP server
+# is running somewhere. to run a local ftp server do the following
+# pip install pyftpdlib==1.5.0
+# mkdir /tmp/luigi-test-ftp/
+# sudo python -m _test_ftp
+
+
 import datetime
 import ftplib
 import os
-import time
+import shutil
+import sys
 from helpers import unittest
 try:
     from cStringIO import StringIO
 except ImportError:
-    from io import StringIO
+    from io import BytesIO
+
+    def StringIO(s):
+        return BytesIO(s.encode('utf8'))
 
 from luigi.contrib.ftp import RemoteFileSystem, RemoteTarget
 
@@ -32,7 +43,7 @@ FILE1 = """this is file1"""
 FILE2 = """this is file2"""
 FILE3 = """this is file3"""
 
-HOST = "some_host"
+HOST = "localhost"
 USER = "luigi"
 PWD = "some_password"
 
@@ -169,15 +180,27 @@ class TestRemoteTarget(unittest.TestCase):
         remotetarget = RemoteTarget(remote_file, HOST, username=USER, password=PWD)
         remotetarget.get(local_filepath)
 
+        # make sure that it can open file
+        with remotetarget.open('r') as fin:
+            self.assertEqual(fin.read(), "something to fill")
+
+        # check for cleaning temporary files
+        if sys.version_info >= (3, 2):
+            # cleanup uses tempfile.TemporaryDirectory only available in 3.2+
+            temppath = remotetarget._RemoteTarget__tmp_path
+            self.assertTrue(os.path.exists(temppath))
+            remotetarget = None  # garbage collect remotetarget
+            self.assertFalse(os.path.exists(temppath))
+
         # file is successfuly created
         self.assertTrue(os.path.exists(local_filepath))
 
         # test RemoteTarget with mtime
-        ts = datetime.datetime.now() - datetime.timedelta(minutes=2)
+        ts = datetime.datetime.now() - datetime.timedelta(days=2)
         delayed_remotetarget = RemoteTarget(remote_file, HOST, username=USER, password=PWD, mtime=ts)
         self.assertTrue(delayed_remotetarget.exists())
 
-        ts = datetime.datetime.now() + datetime.timedelta(minutes=2)
+        ts = datetime.datetime.now() + datetime.timedelta(days=2)  # who knows what timezone it is in
         delayed_remotetarget = RemoteTarget(remote_file, HOST, username=USER, password=PWD, mtime=ts)
         self.assertFalse(delayed_remotetarget.exists())
 
@@ -189,3 +212,28 @@ class TestRemoteTarget(unittest.TestCase):
         ftp.cwd("/")
         ftp.rmd("test")
         ftp.close()
+
+
+def _run_ftp_server():
+    from pyftpdlib.authorizers import DummyAuthorizer
+    from pyftpdlib.handlers import FTPHandler
+    from pyftpdlib.servers import FTPServer
+
+    # Instantiate a dummy authorizer for managing 'virtual' users
+    authorizer = DummyAuthorizer()
+
+    tmp_folder = '/tmp/luigi-test-ftp-server/'
+    if os.path.exists(tmp_folder):
+        shutil.rmtree(tmp_folder)
+    os.mkdir(tmp_folder)
+
+    authorizer.add_user(USER, PWD, tmp_folder, perm='elradfmwM')
+    handler = FTPHandler
+    handler.authorizer = authorizer
+    address = ('localhost', 21)
+    server = FTPServer(address, handler)
+    server.serve_forever()
+
+
+if __name__ == '__main__':
+    _run_ftp_server()

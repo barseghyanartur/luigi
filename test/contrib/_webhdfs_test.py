@@ -15,20 +15,20 @@
 # limitations under the License.
 #
 
-import datetime
 import os
-import posixpath
-import time
 from helpers import unittest
 
 from luigi.contrib import webhdfs
 
+from nose.plugins.attrib import attr
 
+
+@attr('apache')
 class TestWebHdfsTarget(unittest.TestCase):
 
     '''
     This test requires a running Hadoop cluster with WebHdfs enabled
-    This test requires the client.cfg file to have a `hdfs` section
+    This test requires the luigi.cfg file to have a `hdfs` section
     with the namenode_host, namenode_port and user settings.
     '''
 

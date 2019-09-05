@@ -74,7 +74,7 @@ class HdfsClient(hdfs_abstract_client.HdfsFileSystem):
         """
 
         cmd = load_hadoop_cmd() + ['fs', '-stat', path]
-        logger.debug('Running file existence check: %s', u' '.join(cmd))
+        logger.debug('Running file existence check: %s', subprocess.list2cmdline(cmd))
         p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True, universal_newlines=True)
         stdout, stderr = p.communicate()
         if p.returncode == 0:
@@ -87,7 +87,7 @@ class HdfsClient(hdfs_abstract_client.HdfsFileSystem):
                     return False
             raise hdfs_error.HDFSCliError(cmd, p.returncode, stdout, stderr)
 
-    def rename(self, path, dest):
+    def move(self, path, dest):
         parent_dir = os.path.dirname(dest)
         if parent_dir != '' and not self.exists(parent_dir):
             self.mkdir(parent_dir)
@@ -222,15 +222,16 @@ class HdfsClientCdh3(HdfsClient):
     This client uses CDH3 syntax for file system commands.
     """
 
-    def mkdir(self, path):
+    def mkdir(self, path, parents=True, raise_if_exists=False):
         """
-        No -p switch, so this will fail creating ancestors.
+        No explicit -p switch, this version of Hadoop always creates parent directories.
         """
         try:
             self.call_check(load_hadoop_cmd() + ['fs', '-mkdir', path])
         except hdfs_error.HDFSCliError as ex:
             if "File exists" in ex.stderr:
-                raise FileAlreadyExists(ex.stderr)
+                if raise_if_exists:
+                    raise FileAlreadyExists(ex.stderr)
             else:
                 raise
 

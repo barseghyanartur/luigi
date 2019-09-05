@@ -36,16 +36,33 @@ except ImportError:
 
 class hdfs(luigi.Config):
     client_version = luigi.IntParameter(default=None)
-    effective_user = luigi.Parameter(default=None)
+    effective_user = luigi.OptionalParameter(
+        default=os.getenv('HADOOP_USER_NAME'),
+        description="Optionally specifies the effective user for snakebite. "
+                    "If not set the environment variable HADOOP_USER_NAME is "
+                    "used, else USER")
     snakebite_autoconfig = luigi.BoolParameter(default=False)
-    namenode_host = luigi.Parameter(default=None)
+    namenode_host = luigi.OptionalParameter(default=None)
     namenode_port = luigi.IntParameter(default=None)
     client = luigi.Parameter(default='hadoopcli')
-    tmp_dir = luigi.Parameter(config_path=dict(section='core', name='hdfs-tmp-dir'), default=None)
+    tmp_dir = luigi.OptionalParameter(
+        default=None,
+        config_path=dict(section='core', name='hdfs-tmp-dir'),
+    )
+
+
+class hadoopcli(luigi.Config):
+    command = luigi.Parameter(default="hadoop",
+                              config_path=dict(section="hadoop", name="command"),
+                              description='The hadoop command, will run split() on it, '
+                              'so you can pass something like "hadoop --param"')
+    version = luigi.Parameter(default="cdh4",
+                              config_path=dict(section="hadoop", name="version"),
+                              description='Can also be cdh3 or apache1')
 
 
 def load_hadoop_cmd():
-    return luigi.configuration.get_config().get('hadoop', 'command', 'hadoop').split()
+    return hadoopcli().command.split()
 
 
 def get_configured_hadoop_version():
@@ -57,10 +74,10 @@ def get_configured_hadoop_version():
     this setting with "cdh3" or "apache1" in the hadoop section of the config
     in order to use the old syntax.
     """
-    return luigi.configuration.get_config().get("hadoop", "version", "cdh4").lower()
+    return hadoopcli().version.lower()
 
 
-def get_configured_hdfs_client(show_warnings=True):
+def get_configured_hdfs_client():
     """
     This is a helper that fetches the configuration value for 'client' in
     the [hdfs] section. It will return the client that retains backwards
@@ -73,12 +90,11 @@ def get_configured_hdfs_client(show_warnings=True):
         "snakebite",
     ]
     if six.PY3 and (custom in conf_usinf_snakebite):
-        if show_warnings:
-            warnings.warn(
-                "snakebite client not compatible with python3 at the moment"
-                "falling back on hadoopcli",
-                stacklevel=2
-            )
+        warnings.warn(
+            "snakebite client not compatible with python3 at the moment"
+            "falling back on hadoopcli",
+            stacklevel=2
+        )
         return "hadoopcli"
     return custom
 

@@ -15,13 +15,13 @@ Table of Contents
    workflows.rst
    tasks.rst
    parameters.rst
-   command_line.rst
-   programmatic_execution.rst
+   running_luigi.rst
    central_scheduler.rst
    execution_model.rst
    luigi_patterns.rst
    configuration.rst
-   more_info.rst
+   logging.rst
+   design_and_limitations.rst
 
 API Reference
 -------------
@@ -32,6 +32,7 @@ API Reference
    luigi
    luigi.contrib
    luigi.tools
+   luigi.local_target
 
 
 Indices and tables
@@ -40,4 +41,3 @@ Indices and tables
 * :ref:`genindex`
 * :ref:`modindex`
 * :ref:`search`
-

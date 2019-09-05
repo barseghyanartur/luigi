@@ -20,7 +20,9 @@ Provides functionality to run a Hadoop job using a Jar
 
 import logging
 import os
+import pipes
 import random
+import warnings
 
 import luigi.contrib.hadoop
 import luigi.contrib.hdfs
@@ -50,9 +52,18 @@ def fix_paths(job):
                 logger.info('Using temp path: %s for path %s', y.path, x.path)
                 args.append(y.path)
         else:
-            args.append(str(x))
+            try:
+                # hopefully the target has a path to use
+                args.append(x.path)
+            except AttributeError:
+                # if there's no path then hope converting it to a string will work
+                args.append(str(x))
 
     return (tmp_files, args)
+
+
+class HadoopJarJobError(Exception):
+    pass
 
 
 class HadoopJarJobRunner(luigi.contrib.hadoop.JobRunner):
@@ -63,26 +74,52 @@ class HadoopJarJobRunner(luigi.contrib.hadoop.JobRunner):
     def __init__(self):
         pass
 
-    def run_job(self, job):
+    def run_job(self, job, tracking_url_callback=None):
+        if tracking_url_callback is not None:
+            warnings.warn("tracking_url_callback argument is deprecated, task.set_tracking_url is "
+                          "used instead.", DeprecationWarning)
+
         # TODO(jcrobak): libjars, files, etc. Can refactor out of
         # hadoop.HadoopJobRunner
-        if not job.jar() or not os.path.exists(job.jar()):
-            logger.error("Can't find jar: %s, full path %s", job.jar(), os.path.abspath(job.jar()))
-            raise Exception("job jar does not exist")
-        arglist = luigi.contrib.hdfs.load_hadoop_cmd() + ['jar', job.jar()]
+        if not job.jar():
+            raise HadoopJarJobError("Jar not defined")
+
+        hadoop_arglist = luigi.contrib.hdfs.load_hadoop_cmd() + ['jar', job.jar()]
         if job.main():
-            arglist.append(job.main())
+            hadoop_arglist.append(job.main())
 
         jobconfs = job.jobconfs()
 
         for jc in jobconfs:
-            arglist += ['-D' + jc]
+            hadoop_arglist += ['-D' + jc]
 
         (tmp_files, job_args) = fix_paths(job)
 
-        arglist += job_args
+        hadoop_arglist += job_args
 
-        luigi.contrib.hadoop.run_and_track_hadoop_job(arglist)
+        ssh_config = job.ssh()
+        if ssh_config:
+            host = ssh_config.get("host", None)
+            key_file = ssh_config.get("key_file", None)
+            username = ssh_config.get("username", None)
+            if not host or not key_file or not username:
+                raise HadoopJarJobError("missing some config for HadoopRemoteJarJobRunner")
+            arglist = ['ssh', '-i', key_file,
+                       '-o', 'BatchMode=yes']  # no password prompts etc
+            if ssh_config.get("no_host_key_check", False):
+                arglist += ['-o', 'UserKnownHostsFile=/dev/null',
+                            '-o', 'StrictHostKeyChecking=no']
+            arglist.append('{}@{}'.format(username, host))
+            hadoop_arglist = [pipes.quote(arg) for arg in hadoop_arglist]
+            arglist.append(' '.join(hadoop_arglist))
+        else:
+            if not os.path.exists(job.jar()):
+                logger.error("Can't find jar: %s, full path %s", job.jar(),
+                             os.path.abspath(job.jar()))
+                raise HadoopJarJobError("job jar does not exist")
+            arglist = hadoop_arglist
+
+        luigi.contrib.hadoop.run_and_track_hadoop_job(arglist, job.set_tracking_url)
 
         for a, b in tmp_files:
             a.move(b)
@@ -115,6 +152,13 @@ class HadoopJarJobTask(luigi.contrib.hadoop.BaseHadoopJobTask):
         atomically move them into place after the job finishes.
         """
         return True
+
+    def ssh(self):
+        """
+        Set this to run hadoop command remotely via ssh. It needs to be a dict that looks like
+        {"host": "myhost", "key_file": None, "username": None, ["no_host_key_check": False]}
+        """
+        return None
 
     def args(self):
         """

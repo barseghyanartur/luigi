@@ -27,9 +27,12 @@ import subprocess
 from helpers import unittest
 import target_test
 
-from luigi.contrib.ssh import RemoteContext, RemoteTarget
+from luigi.contrib.ssh import RemoteContext, RemoteFileSystem, RemoteTarget, RemoteCalledProcessError
+from luigi.target import MissingParentDirectory, FileAlreadyExists
 
-working_ssh_host = 'localhost'
+from nose.plugins.attrib import attr
+
+working_ssh_host = os.environ.get('SSH_TEST_HOST', 'localhost')
 # set this to a working ssh host string (e.g. "localhost") to activate integration tests
 # The following tests require a working ssh server at `working_ssh_host`
 # the test runner can ssh into using password-less authentication
@@ -60,6 +63,7 @@ except Exception:
     raise unittest.SkipTest('Not able to connect to ssh server')
 
 
+@attr('contrib')
 class TestRemoteContext(unittest.TestCase):
 
     def setUp(self):
@@ -107,6 +111,7 @@ class TestRemoteContext(unittest.TestCase):
             print("Closing tunnel")
 
 
+@attr('contrib')
 class TestRemoteTarget(unittest.TestCase):
 
     """ These tests assume RemoteContext working
@@ -148,6 +153,9 @@ class TestRemoteTarget(unittest.TestCase):
         f.close()
         self.assertEqual(file_content, "hello")
 
+        self.assertTrue(self.target.fs.exists(self.filepath))
+        self.assertFalse(self.target.fs.isdir(self.filepath))
+
     def test_context_manager(self):
         with self.target.open('r') as f:
             file_content = f.read()
@@ -155,6 +163,50 @@ class TestRemoteTarget(unittest.TestCase):
         self.assertEqual(file_content, "hello")
 
 
+@attr('contrib')
+class TestRemoteFilesystem(unittest.TestCase):
+    def setUp(self):
+        self.fs = RemoteFileSystem(working_ssh_host)
+        self.root = '/tmp/luigi-remote-test'
+        self.directory = self.root + '/dir'
+        self.filepath = self.directory + '/file'
+        self.target = RemoteTarget(
+            self.filepath,
+            working_ssh_host,
+        )
+
+        self.fs.remote_context.check_output(['rm', '-rf', self.root])
+        self.addCleanup(self.fs.remote_context.check_output, ['rm', '-rf', self.root])
+
+    def test_mkdir(self):
+        self.assertFalse(self.fs.isdir(self.directory))
+
+        self.assertRaises(MissingParentDirectory, self.fs.mkdir, self.directory, parents=False)
+        self.fs.mkdir(self.directory)
+        self.assertTrue(self.fs.isdir(self.directory))
+
+        # Shouldn't throw
+        self.fs.mkdir(self.directory)
+
+        self.assertRaises(FileAlreadyExists, self.fs.mkdir, self.directory, raise_if_exists=True)
+
+    def test_list(self):
+        with self.target.open('w'):
+            pass
+
+        self.assertEqual([self.target.path], list(self.fs.listdir(self.directory)))
+
+
+@attr('contrib')
+class TestGetAttrRecursion(unittest.TestCase):
+    def test_recursion_on_delete(self):
+        target = RemoteTarget("/etc/this/does/not/exist", working_ssh_host)
+        with self.assertRaises(RemoteCalledProcessError):
+            with target.open('w') as fh:
+                fh.write("test")
+
+
+@attr('contrib')
 class TestRemoteTargetAtomicity(unittest.TestCase, target_test.FileSystemTargetTestMixin):
     path = '/tmp/luigi_remote_atomic_test.txt'
     ctx = RemoteContext(working_ssh_host)
@@ -201,6 +253,9 @@ class TestRemoteTargetAtomicity(unittest.TestCase, target_test.FileSystemTargetT
         f = open(self.local_file, 'r')
         file_content = f.read()
         self.assertEqual(file_content, 'hello')
+
+    test_move_on_fs = None  # ssh don't have move (yet?)
+    test_rename_dont_move_on_fs = None  # ssh don't have move (yet?)
 
 
 class TestRemoteTargetCreateDirectories(TestRemoteTargetAtomicity):

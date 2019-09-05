@@ -37,18 +37,18 @@ class DummyTask(luigi.Task):
         return self.has_run
 
     def run(self):
-        logging.debug("%s - setting has_run", self.task_id)
+        logging.debug("%s - setting has_run", self)
         self.has_run = True
 
 
-class CustomizedLocalScheduler(luigi.scheduler.CentralPlannerScheduler):
+class CustomizedLocalScheduler(luigi.scheduler.Scheduler):
 
     def __init__(self, *args, **kwargs):
         super(CustomizedLocalScheduler, self).__init__(*args, **kwargs)
         self.has_run = False
 
     def get_work(self, worker, host=None, **kwargs):
-        r = super(CustomizedLocalScheduler, self).get_work(worker, host)
+        r = super(CustomizedLocalScheduler, self).get_work(worker=worker, host=host)
         self.has_run = True
         return r
 
@@ -63,7 +63,7 @@ class CustomizedRemoteScheduler(luigi.rpc.RemoteScheduler):
         self.has_run = False
 
     def get_work(self, worker, host=None):
-        r = super(CustomizedRemoteScheduler, self).get_work(worker, host)
+        r = super(CustomizedRemoteScheduler, self).get_work(worker=worker, host=host)
         self.has_run = True
         return r
 
@@ -94,8 +94,8 @@ class CustomizedWorkerSchedulerFactory(object):
     def create_local_scheduler(self):
         return self.scheduler
 
-    def create_remote_scheduler(self, host, port):
-        return CustomizedRemoteScheduler(host=host, port=port)
+    def create_remote_scheduler(self, url):
+        return CustomizedRemoteScheduler(url)
 
     def create_worker(self, scheduler, worker_processes=None, assistant=False):
         return self.worker
@@ -128,6 +128,3 @@ class CustomizedWorkerTest(unittest.TestCase):
         self.assertFalse(self.worker_scheduler_factory.worker.complete())
         luigi.run(['DummyTask', '--n', '4'], worker_scheduler_factory=self.worker_scheduler_factory)
         self.assertTrue(self.worker_scheduler_factory.worker.complete())
-
-if __name__ == '__main__':
-    unittest.main()

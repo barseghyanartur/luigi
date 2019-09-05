@@ -23,8 +23,6 @@ import datetime
 import logging
 import logging.handlers
 import os
-import random
-import signal
 
 rootlogger = logging.getLogger()
 server_logger = logging.getLogger("luigi.server")
@@ -44,8 +42,11 @@ def check_pid(pidfile):
 def write_pid(pidfile):
     server_logger.info("Writing pid file")
     piddir = os.path.dirname(pidfile)
-    if piddir != '' and not os.path.exists(piddir):
-        os.makedirs(piddir)
+    if piddir != '':
+        try:
+            os.makedirs(piddir)
+        except OSError:
+            pass
 
     with open(pidfile, 'w') as fobj:
         fobj.write(str(os.getpid()))
@@ -74,7 +75,7 @@ def _server_already_running(pidfile):
     return False
 
 
-def daemonize(cmd, pidfile=None, logdir=None, api_port=8082, address=None):
+def daemonize(cmd, pidfile=None, logdir=None, api_port=8082, address=None, unix_socket=None):
     import daemon
 
     logdir = logdir or "/var/log/luigi"
@@ -96,11 +97,20 @@ def daemonize(cmd, pidfile=None, logdir=None, api_port=8082, address=None):
     stdout_proxy = open(stdout_path, 'a+')
     stderr_proxy = open(stderr_path, 'a+')
 
-    ctx = daemon.DaemonContext(
-        stdout=stdout_proxy,
-        stderr=stderr_proxy,
-        working_directory='.'
-    )
+    try:
+        ctx = daemon.DaemonContext(
+            stdout=stdout_proxy,
+            stderr=stderr_proxy,
+            working_directory='.',
+            initgroups=False,
+        )
+    except TypeError:
+        # Older versions of python-daemon cannot deal with initgroups arg.
+        ctx = daemon.DaemonContext(
+            stdout=stdout_proxy,
+            stderr=stderr_proxy,
+            working_directory='.',
+        )
 
     with ctx:
         loghandler = get_spool_handler(log_path)
@@ -114,4 +124,4 @@ def daemonize(cmd, pidfile=None, logdir=None, api_port=8082, address=None):
                 return
             write_pid(pidfile)
 
-        cmd(api_port=api_port, address=address)
+        cmd(api_port=api_port, address=address, unix_socket=unix_socket)

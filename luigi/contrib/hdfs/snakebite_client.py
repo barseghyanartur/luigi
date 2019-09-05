@@ -23,7 +23,6 @@ Originally written by Alan Brenner <alan@magnetic.com> github.com/alanbbr
 
 
 from luigi.contrib.hdfs import config as hdfs_config
-from luigi.contrib.hdfs import error as hdfs_error
 from luigi.contrib.hdfs import abstract_client as hdfs_abstract_client
 from luigi import six
 import luigi.contrib.target
@@ -50,7 +49,9 @@ class SnakebiteHdfsClient(hdfs_abstract_client.HdfsFileSystem):
     def list_path(path):
         if isinstance(path, list) or isinstance(path, tuple):
             return path
-        if isinstance(path, str) or isinstance(path, unicode):
+        # TODO: Should this be:
+        # isinstance(path, (six.text_type, six.binary_type))?
+        if isinstance(path, six.string_types):
             return [path, ]
         return [str(path), ]
 
@@ -87,12 +88,9 @@ class SnakebiteHdfsClient(hdfs_abstract_client.HdfsFileSystem):
         :type path: string
         :return: boolean, True if path exists in HDFS
         """
-        try:
-            return self.get_bite().test(path, exists=True)
-        except Exception as err:    # IGNORE:broad-except
-            raise hdfs_error.HDFSCliError("snakebite.test", -1, str(err), repr(err))
+        return self.get_bite().test(path, exists=True)
 
-    def rename(self, path, dest):
+    def move(self, path, dest):
         """
         Use snakebite.rename, if available.
 
@@ -123,9 +121,9 @@ class SnakebiteHdfsClient(hdfs_abstract_client.HdfsFileSystem):
         from snakebite.errors import FileAlreadyExistsException
         try:
             self.get_bite().rename2(path, dest, overwriteDest=False)
-            return True
         except FileAlreadyExistsException:
-            return False
+            # Unfortunately python2 don't allow exception chaining.
+            raise luigi.target.FileAlreadyExists()
 
     def remove(self, path, recursive=True, skip_trash=False):
         """
@@ -133,7 +131,7 @@ class SnakebiteHdfsClient(hdfs_abstract_client.HdfsFileSystem):
 
         :param path: delete-able file(s) or directory(ies)
         :type path: either a string or a sequence of strings
-        :param recursive: delete directories trees like \*nix: rm -r
+        :param recursive: delete directories trees like \\*nix: rm -r
         :type recursive: boolean, default is True
         :param skip_trash: do or don't move deleted items into the trash first
         :type skip_trash: boolean, default is False (use trash)
@@ -147,7 +145,7 @@ class SnakebiteHdfsClient(hdfs_abstract_client.HdfsFileSystem):
 
         :param path: update-able file(s)
         :type path: either a string or sequence of strings
-        :param permissions: \*nix style permission number
+        :param permissions: \\*nix style permission number
         :type permissions: octal
         :param recursive: change just listed entry(ies) or all in directories
         :type recursive: boolean, default is False
@@ -224,6 +222,15 @@ class SnakebiteHdfsClient(hdfs_abstract_client.HdfsFileSystem):
         return list(self.get_bite().copyToLocal(self.list_path(path),
                                                 local_destination))
 
+    def get_merge(self, path, local_destination):
+        """
+        Using snakebite getmerge to implement this.
+        :param path: HDFS directory
+        :param local_destination: path on the system running Luigi
+        :return: merge of the directory
+        """
+        return list(self.get_bite().getmerge(path=path, dst=local_destination))
+
     def mkdir(self, path, parents=True, mode=0o755, raise_if_exists=False):
         """
         Use snakebite.mkdir, if available.
@@ -235,7 +242,7 @@ class SnakebiteHdfsClient(hdfs_abstract_client.HdfsFileSystem):
         :type path: string
         :param parents: create any missing parent directories
         :type parents: boolean, default is True
-        :param mode: \*nix style owner/group/other permissions
+        :param mode: \\*nix style owner/group/other permissions
         :type mode: octal, default 0755
         """
         result = list(self.get_bite().mkdir(self.list_path(path),

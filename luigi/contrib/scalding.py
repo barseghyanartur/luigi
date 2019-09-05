@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import subprocess
+import warnings
 
 from luigi import six
 
@@ -34,7 +35,7 @@ logger = logging.getLogger('luigi-interface')
 """
 Scalding support for Luigi.
 
-Example configuration section in client.cfg::
+Example configuration section in luigi.cfg::
 
     [scalding]
     # scala home directory, which should include a lib subdir with scala jars.
@@ -184,16 +185,20 @@ class ScaldingJobRunner(luigi.contrib.hadoop.JobRunner):
         arglist = ['java', '-cp', scala_cp, 'scala.tools.nsc.Main',
                    '-classpath', classpath,
                    '-d', build_dir, job_src]
-        logger.info('Compiling scala source: %s', ' '.join(arglist))
+        logger.info('Compiling scala source: %s', subprocess.list2cmdline(arglist))
         subprocess.check_call(arglist)
 
         # build job jar file
         arglist = ['jar', 'cf', job_jar, '-C', build_dir, '.']
-        logger.info('Building job jar: %s', ' '.join(arglist))
+        logger.info('Building job jar: %s', subprocess.list2cmdline(arglist))
         subprocess.check_call(arglist)
         return job_jar
 
-    def run_job(self, job):
+    def run_job(self, job, tracking_url_callback=None):
+        if tracking_url_callback is not None:
+            warnings.warn("tracking_url_callback argument is deprecated, task.set_tracking_url is "
+                          "used instead.", DeprecationWarning)
+
         job_jar = self.build_job_jar(job)
         jars = [job_jar] + self.get_libjars() + job.extra_jars()
         scalding_core = self.get_scalding_core()
@@ -215,8 +220,8 @@ class ScaldingJobRunner(luigi.contrib.hadoop.JobRunner):
         hadoop_cp = ':'.join(filter(None, jars))
         env['HADOOP_CLASSPATH'] = hadoop_cp
         logger.info("Submitting Hadoop job: HADOOP_CLASSPATH=%s %s",
-                    hadoop_cp, ' '.join(arglist))
-        luigi.contrib.hadoop.run_and_track_hadoop_job(arglist, env=env)
+                    hadoop_cp, subprocess.list2cmdline(arglist))
+        luigi.contrib.hadoop.run_and_track_hadoop_job(arglist, job.set_tracking_url, env=env)
 
         for a, b in tmp_files:
             a.move(b)
